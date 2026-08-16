@@ -145,13 +145,15 @@ remaining operational work is in **Production hardening** below.
 
 ## Migration findings
 
-Six issues were hit: four defects in `koha_migrate_new_server.sh` (items 1, 4, 5
-and 6), one data problem in the source database (item 3), and one anomaly in the
-transferred dumps (item 2).
+Seven issues were hit: four defects in `koha_migrate_new_server.sh` (items 1, 4, 5
+and 6), two data problems in the source database (items 3 and 7), and one anomaly
+in the transferred dumps (item 2).
 
 Fix status — **only item 1 is fixed in the script itself.** Items 4, 5 and 6 were
 worked around on this host and remain defects in `koha_migrate_new_server.sh`; a
-future run elsewhere would hit all three again.
+future run elsewhere would hit all three again. Item 7 was found after the
+migration was already considered complete (via a 500 error report) and is fully
+fixed on `atslibrary` — see below.
 
 ### 1. Silent abort at Phase 4 (script defect — fixed)
 
@@ -261,6 +263,68 @@ sed -i 's/^# *en_US.UTF-8 UTF-8/en_US.UTF-8 UTF-8/' /etc/locale.gen && locale-ge
 
 `locale -a` now reports `en_US.utf8`. The script should be changed to do the same,
 and to verify with `locale -a | grep -q en_US` rather than assuming success.
+
+### 7. Missing item types across nearly the entire collection (data problem in the source database — fixed)
+
+Discovered days after the migration was signed off, via a staff 500 error on
+`catalogue/detail.pl?biblionumber=44945&audit=1`:
+
+```
+Item with itemnumber=42445 does not have an itype value, additionally no item
+type defined for biblionumber=44945
+```
+
+`items.itype` was NULL for **26,492 of 26,533 items (99.8%)**, and
+`biblioitems.itemtype` was NULL for 16,388 records — leaving **26,475 items with
+no resolvable item type at all** (item-level and biblio-level fallback both
+empty). Root cause is in the *source* data, not this migration: affected
+biblios' MARCXML (e.g. biblio 44945) contains no `942` or `952` fields at all,
+confirming items were bulk-loaded directly into the `biblio`/`biblioitems`/`items`
+tables on the old 16.11 server (or earlier) rather than catalogued through MARC,
+and item type was simply never populated. `koha_migrate_new_server.sh` only
+moves and upgrades the schema — it does not touch item-level data — so it neither
+caused nor could have caught this.
+
+Missing item type is more than a cosmetic gap: `Koha::Item::_status()`
+(`Koha/Item.pm` line 1672) calls `$self->item_type->notforloan` without a
+definedness check, so any item with no resolvable type throws
+`Can't call method "notforloan" on an undefined value` and 500s the staff detail
+page and the `/api/v1/biblios/{id}/items` endpoint it depends on.
+
+A secondary, still-live gap made this hard to fix by hand: the `CAT` and `KIN`
+cataloguing frameworks had **no `942` tag/subfield structure at all** (only the
+Default framework did), so catalogers using them had no way to set item type via
+the MARC editor.
+
+**Fix applied to `atslibrary` (2026-08-16):**
+
+- `identify_missing_itemtypes.sql` — read-only diagnostics (counts, full broken-item
+  list, itemtype list, frameworks missing the `942$c` mapping).
+- `apply_itemtype_fix_20260816.sql` — idempotent, transactional fix:
+  backfills `items.itype` / `biblioitems.itemtype` (4 physical Kindle e-readers,
+  identified by title, got `KINDLE`; everything else defaulted to `BOOK`, the
+  only other item type defined in this system), then copies the full `942` block
+  from the Default framework into `CAT` and `KIN` so cataloging can set item type
+  going forward. Run with `koha-mysql atslibrary < apply_itemtype_fix_20260816.sql`,
+  followed by a `Koha::Caches->flush_all` and a `koha-rebuild-zebra -f -v atslibrary`
+  (item type is indexed).
+- `koha-check-missing-itemtypes.sh` — deployed to
+  `/usr/local/sbin/koha-check-missing-itemtypes.sh` with a daily cron entry
+  (`/etc/cron.d/koha-itemtype-audit`) so a regression is caught before it 500s a
+  patron or staff member again.
+
+Verified via an authenticated smoke test (temporary superlibrarian password, set
+and restored via `Koha::Patrons->set_password`, never logged): the original URL
+and its underlying API call both now return HTTP 200 with `effective_item_type_id
+"BOOK"`, and `plack-api-error.log` shows no new occurrences of the crash.
+
+**Not fixed — a training/process gap, not a script or config bug:** one item
+(added 2026-07-20, after this migration) was still saved with a blank item type
+under the *Default* framework, which already had the `942$c` mapping marked
+mandatory. Koha only enforces "mandatory" item subfields with client-side JS on
+the Add/Edit item screen, not a hard server-side check, so it can still be saved
+blank. No further automated fix is possible here without a code change to Koha
+itself; mitigate with staff training and/or the monitoring cron above.
 
 ## Production hardening
 

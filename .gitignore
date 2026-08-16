@@ -6,3 +6,6 @@
 !.gitignore
 !README.md
 !koha_migrate_new_server.sh
+!identify_missing_itemtypes.sql
+!apply_itemtype_fix_20260816.sql
+!koha-check-missing-itemtypes.sh
