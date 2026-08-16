@@ -1,0 +1,8 @@
+# /root is $HOME: default-deny so shell history, SSH keys, migration logs and
+# database dumps can never be staged by an accidental `git add -A`.
+*
+
+# Explicitly tracked project files:
+!.gitignore
+!README.md
+!koha_migrate_new_server.sh
