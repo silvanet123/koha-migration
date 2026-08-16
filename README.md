@@ -333,7 +333,24 @@ library staff.
 
 ## Cleanup steps
 
-None of these are blocking; all are outstanding.
+### Done (2026-08-16)
+
+Removed from `/root`: all three `koha-migration-*.log` files, `upgrade-resume.log`,
+`upgrade-resume2.log`, `zebra-rebuild.log`, `migrate-wrapper.out`, the
+`.migrate_exit` / `.upgrade_exit` / `.upgrade_exit2` / `.zebra_exit` markers, and
+the two 0-byte corrupt dumps (`atslibrary-2019-01-13.sql.gz`,
+`atslibrary-2025-09-06.sql.gz`).
+
+The raw migration transcripts are therefore gone; the findings above are the
+surviving record. None of the deleted files were tracked by git.
+
+`/root` now holds only `README.md`, `koha_migrate_new_server.sh`, the two valid
+dumps, `atslibrary.conf.koha-create.bak` (pre-Phase-7 vhost, kept so the Apache
+change can be reverted) and the `.git` repository.
+
+### Still outstanding
+
+None are blocking.
 
 ### Modified package files
 
@@ -349,34 +366,35 @@ cp -f /tmp/kohadeb/usr/share/koha/intranet/cgi-bin/installer/data/mysql/db_revs/
 apt-get install --reinstall koha-common
 ```
 
-### Dumps in /root
+### Dumps in /root — deliberately retained
 
-```bash
-rm -f /root/atslibrary-2019-01-13.sql.gz /root/atslibrary-2025-09-06.sql.gz  # 0-byte, corrupt
-```
+`atslibrary-2026-08-16.sql.gz` (26 MB) is the **only rollback path** to the
+pre-upgrade state and must be kept until the cutover gap (hardening step 4) is
+closed and staff have verified the data. `atslibrary-2026-08-15.sql.gz` is the
+previous day's dump and is redundant once the newer one is proven good.
 
-Keep `atslibrary-2026-08-16.sql.gz` (26 MB) until the cutover is verified — it is
-the only rollback path to the pre-upgrade state. `atslibrary-2026-08-15.sql.gz`
-is byte-identical in size and redundant. Move the keeper off this host; it is
-not covered by any backup here.
+Both still exist on the old server under `/var/spool/koha/atslibrary/`, so loss
+here is recoverable while `192.168.20.254` is alive — but that ceases to be true
+at decommissioning. Move at least the `2026-08-16` dump off both hosts.
 
-### Temporary artefacts
+### Temporary artefacts outside /root
 
 ```bash
 rm -rf /tmp/kohadeb /tmp/fix_fk_drops.py /tmp/fix_fk_drops2.py
-rm -f /root/.migrate_exit /root/.upgrade_exit /root/.upgrade_exit2 /root/migrate-wrapper.out
 ```
 
-`/root/upgrade-resume.log` and `upgrade-resume2.log` hold the Phase 6 migration
-transcripts — worth retaining for audit, then deleting.
+`/tmp/kohadeb` (152 MB) holds the pristine `db_revs` copies extracted from the
+cached `.deb`. **Keep it until the "Modified package files" item above is
+actioned**, otherwise reverting those 21 files needs an
+`apt-get install --reinstall koha-common`.
 
 ### Security
 
 - MariaDB `root@localhost` still has an **empty password** (see Credentials 2).
-- `/root/koha-migration-*.log`, `upgrade-resume*.log` and `zebra-rebuild.log` are
-  world-readable (`0644`). They do **not** contain the staff password, because
-  Phase 11 was run outside the script — but they do expose full schema and
-  infrastructure detail. `chmod 600` them, or delete after audit.
+- The migration logs have been deleted, so no on-disk artefact now exposes the
+  schema or infrastructure detail. Future runs of the script will recreate
+  world-readable (`0644`) logs in `/root` — and its Phase 11 writes the temporary
+  staff password into them in clear text.
 - The `.gitignore` keeps logs, dumps, `.ssh/` and shell history out of git; keep
   it that way. `koha_migrate_new_server.sh` remains untracked — parameterise
   `ADMIN_TEMP_PASS` before committing it.
