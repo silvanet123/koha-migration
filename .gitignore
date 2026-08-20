@@ -9,3 +9,6 @@
 !identify_missing_itemtypes.sql
 !apply_itemtype_fix_20260816.sql
 !koha-check-missing-itemtypes.sh
+!identify_missing_libraries.sql
+!apply_library_fix_20260820.sql
+!koha-check-missing-libraries.sh

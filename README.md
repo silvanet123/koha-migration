@@ -145,14 +145,14 @@ remaining operational work is in **Production hardening** below.
 
 ## Migration findings
 
-Seven issues were hit: four defects in `koha_migrate_new_server.sh` (items 1, 4, 5
-and 6), two data problems in the source database (items 3 and 7), and one anomaly
-in the transferred dumps (item 2).
+Eight issues were hit: four defects in `koha_migrate_new_server.sh` (items 1, 4, 5
+and 6), three data problems in the source database (items 3, 7 and 8), and one
+anomaly in the transferred dumps (item 2).
 
 Fix status — **only item 1 is fixed in the script itself.** Items 4, 5 and 6 were
 worked around on this host and remain defects in `koha_migrate_new_server.sh`; a
-future run elsewhere would hit all three again. Item 7 was found after the
-migration was already considered complete (via a 500 error report) and is fully
+future run elsewhere would hit all three again. Items 7 and 8 were found after the
+migration was already considered complete (via 500 error reports) and are fully
 fixed on `atslibrary` — see below.
 
 ### 1. Silent abort at Phase 4 (script defect — fixed)
@@ -325,6 +325,70 @@ mandatory. Koha only enforces "mandatory" item subfields with client-side JS on
 the Add/Edit item screen, not a hard server-side check, so it can still be saved
 blank. No further automated fix is possible here without a code change to Koha
 itself; mitigate with staff training and/or the monitoring cron above.
+
+### 8. Items missing home and holding library (data problem in the source database — fixed)
+
+Discovered the same way as item 7: a staff 500 error on
+`catalogue/detail.pl?biblionumber=54120&audit=1`:
+
+```
+Item with itemnumber=61839 does not have home and holding library defined
+```
+
+`items.homebranch` / `items.holdingbranch` were NULL for 14 items across 11
+biblios at first discovery, then found to affect **4,629 items** system-wide
+once checked comprehensively (spanning accession dates from 2017 through 2026,
+87% from the 2017-2018 bulk load). Root cause traced via `import_batches`:
+batch id 8 (`2017.01.30_Mandarin_Export_New_&_ICM_Joined_Deduplicated_ATSMAIN.mrc`,
+imported 2017-02-01) was run with `branchcode` left `NULL`, so any source MARC
+record lacking `952$a`/`$b` produced an item with no branch at all — the same
+class of defect as item 7's missing `942$c`, just for a different item field.
+
+The same secondary gap applied here too: `952$a` (homebranch) and `952$b`
+(holdingbranch) were not `mandatory` and had no `defaultvalue` in **any**
+framework (Default, `CAT`, `KIN`), so staff using the manual Add/Edit item
+screen had nothing stopping them from leaving the branch blank either.
+
+**Fix applied to `atslibrary` (2026-08-17/20) — only the 14 items actually
+causing 500 errors were backfilled at first; the remaining historical items
+with no barcode but valid branches were investigated separately and are
+*not* part of this fix (see the barcode note below).** All items with a
+missing branch (the 14, confirmed to have no active checkouts/holds) were
+backfilled to `ATSMAIN`, the only library defined in this instance:
+
+- `identify_missing_libraries.sql` — read-only diagnostics (counts, full
+  affected-item list, accession-year distribution, framework mandatory/default
+  gaps, and the responsible `import_batches` row).
+- `apply_library_fix_20260820.sql` — idempotent, transactional fix: backfills
+  `items.homebranch` / `items.holdingbranch` to `ATSMAIN`, adds a schema-level
+  `DEFAULT 'ATSMAIN'` to both columns (so any future insert that omits them —
+  manual, bulk import, or API — no longer defaults to NULL), then sets
+  `mandatory=1` and `defaultvalue='ATSMAIN'` on `952$a`/`952$b` across Default,
+  `CAT` and `KIN`, mirroring the `942$c` fix for item 7. Run with
+  `koha-mysql atslibrary < apply_library_fix_20260820.sql`, followed by
+  `koha-plack --restart atslibrary` to refresh the cached framework structures.
+- `koha-check-missing-libraries.sh` — deployed to
+  `/usr/local/sbin/koha-check-missing-libraries.sh` with a daily cron entry
+  (`/etc/cron.d/koha-library-audit`), since a bulk import can still write an
+  explicit `NULL` and bypass both the schema default and the GUI mandatory
+  check.
+
+Verified: the originally-failing URL and the staff/OPAC homepages all return
+HTTP 200, and `SELECT COUNT(*) FROM items WHERE homebranch IS NULL OR
+holdingbranch IS NULL` returns 0.
+
+**Not fixed — a separate, lower-severity finding:** ~4,629 items (mostly from
+the same 2017-2018 batch) have a valid branch but no barcode. This does not
+cause a 500 and was left untouched at the site owner's request; if it needs
+remediating for production, treat it as a distinct finding rather than folding
+it into this script, since auto-generating barcodes for legacy records risks
+colliding with physical labels that were never entered into Koha.
+
+**Caveat for the single-branch default above:** if this instance ever gains a
+second library, `apply_library_fix_20260820.sql` must **not** be replayed
+as-is — the hard-coded `ATSMAIN` default would silently misassign new items to
+the wrong branch. Re-derive the correct default (or make it per-import-batch)
+before reusing this script.
 
 ## Production hardening
 
