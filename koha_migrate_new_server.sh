@@ -573,6 +573,14 @@ step "PHASE 11: Resetting staff account passwords"
 # on the old server (passwords could have changed after the dump was taken).
 # Set a known temporary password for all accounts with elevated permissions.
 
+# Security: never echo the temp password to stdout (it would land in
+# $LOGFILE, which is world-readable by default). Write it once to a
+# root-only file instead; the final summary below points at that file.
+PASS_FILE="/root/.koha_${INSTANCE}_admin_temp_pass"
+umask 077
+printf '%s\n' "$ADMIN_TEMP_PASS" >"$PASS_FILE"
+chmod 600 "$PASS_FILE"
+
 KOHA_CONF=/etc/koha/sites/${INSTANCE}/koha-conf.xml \
   PERL5LIB=/usr/share/koha/lib \
   perl <<PERLEOF
@@ -592,7 +600,7 @@ while (my \$patron = \$patrons->next) {
 Koha::Patrons->search({ flags => { '>' => 0 } })
     ->update({ login_attempts => 0 });
 
-print "\\nAll staff passwords set to: ${ADMIN_TEMP_PASS}\\n";
+print "\\nAll staff passwords reset (value not echoed — see ${PASS_FILE} on this host).\\n";
 PERLEOF
 
 # Flush memcached to clear any cached session state
@@ -627,7 +635,9 @@ echo "  ┌───────────────────────
 echo "  │  Temporary login credentials for all staff:     │"
 echo "  │                                                  │"
 echo "  │  Username: (their existing userid)               │"
-echo "  │  Password: ${ADMIN_TEMP_PASS}              │"
+echo "  │  Password: see ${PASS_FILE} on this host        │"
+echo "  │  (not printed here — this summary is logged to  │"
+echo "  │   $LOGFILE)                                      │"
 echo "  └─────────────────────────────────────────────────┘"
 echo ""
 
