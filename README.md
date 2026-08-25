@@ -105,8 +105,13 @@ touched.
 **Do not re-run `koha_migrate_new_server.sh` against this instance.** Phase 4
 unconditionally drops `koha_atslibrary` and re-imports the 16.11 dump, which
 would discard the completed upgrade and require repeating Phase 6 and every
-manual intervention below. If the migration must ever be redone from scratch, fix
-the defects in Findings 4, 5 and 6 first.
+manual intervention below. Findings 4, 5 and 6 are now fixed in
+`koha_migrate_new_server.sh` itself (2026-08-25, ahead of a fresh run against
+`192.168.20.251`), so a from-scratch re-run elsewhere should no longer need
+those manual interventions — but do not run it against `atslibrary` on this
+host, since Phase 4 still unconditionally drops `koha_atslibrary` and would
+discard the Finding 7/8 data fixes, which live only in the database, not the
+script.
 
 Phases 7-11 were therefore run individually. Commands actually used — note the
 corrected locale handling, which differs from the script:
@@ -149,11 +154,14 @@ Eight issues were hit: four defects in `koha_migrate_new_server.sh` (items 1, 4,
 and 6), three data problems in the source database (items 3, 7 and 8), and one
 anomaly in the transferred dumps (item 2).
 
-Fix status — **only item 1 is fixed in the script itself.** Items 4, 5 and 6 were
-worked around on this host and remain defects in `koha_migrate_new_server.sh`; a
-future run elsewhere would hit all three again. Items 7 and 8 were found after the
+Fix status — **items 1, 4, 5 and 6 are now fixed in the script itself**
+(items 4-6 were originally worked around by hand on this host on 2026-08-16,
+then fixed in `koha_migrate_new_server.sh` on 2026-08-25 ahead of a fresh run
+against a new host, `192.168.20.251`). Items 7 and 8 were found after the
 migration was already considered complete (via 500 error reports) and are fully
-fixed on `atslibrary` — see below.
+fixed on `atslibrary` — see below; they are data problems in the source
+database, not script defects, so they're addressed with the standalone,
+re-runnable `apply_*_fix_*.sql` scripts rather than folded into the script.
 
 ### 1. Silent abort at Phase 4 (script defect — fixed)
 
@@ -200,7 +208,7 @@ purchase-suggestion permission instead. A durable fix is to re-run the orphan
 cleanup (or prefer remapping) immediately before `21.12.00.016` rather than once
 at the start of Phase 6.
 
-### 4. Phase 5 Patch 2 missed multi-line statements (script defect — NOT fixed in script)
+### 4. Phase 5 Patch 2 missed multi-line statements (script defect — fixed 2026-08-25)
 
 The upgrade then stopped at `24.06.00.024` (Bug 35044) with
 `Can't DROP FOREIGN KEY 'afv_fk'` — the FK was absent because Patch 1 drops all
@@ -231,28 +239,35 @@ Recovery and correct fix:
 **Lesson:** always syntax-check generated Perl edits before resuming an upgrade;
 unchecked corruption surfaces later as a far more confusing migration failure.
 
-Important: this was fixed by patching the installed `db_revs` files directly. The
-script's Patch 2 regexes were **not** updated, so it still only handles the
-single-line form. To fix it there, replace the three patterns with brace-bounded
-equivalents allowing whitespace after `do(`:
+Originally fixed by patching the installed `db_revs` files directly on this host,
+with the script's own Patch 2 regexes left unchanged. **Now fixed in the script
+itself (2026-08-25):** the three patterns were replaced with brace-bounded
+equivalents that tolerate whitespace/newlines around the delimiters —
 `\$dbh->do\(\s*qq?\{[^{}]*DROP FOREIGN KEY[^{}]*\}\s*\)` (and the `q|...|` /
-double-quoted variants), and add a `perl -c` gate over every file it edits.
+double-quoted variants) — plus a negative lookbehind so an already-`eval{}`-wrapped
+call is left alone on a re-run, and a `perl -c` gate (reverting the file if it
+fails to compile) after every edit.
 
-### 5. Phase 5 re-patch hazard (script defect — NOT fixed)
+### 5. Phase 5 re-patch hazard (script defect — fixed 2026-08-25)
 
-Phase 5 runs `cp $UPD_PL $UPD_PL.orig` unconditionally. If the script is re-run
-after a Phase 6 failure, that copies the *already patched* file over the pristine
-backup, so the eventual restore restores a patched file and Patch 1 is applied
-twice. Resuming with `koha-upgrade-schema atslibrary` directly avoids this.
-`updatedatabase.pl` is currently pristine (`.orig` removed).
+Phase 5 ran `cp $UPD_PL $UPD_PL.orig` unconditionally. If the script were re-run
+after a Phase 6 failure, that would copy the *already patched* file over the
+pristine backup, so the eventual restore would restore a patched file and Patch 1
+would be applied twice. Worked around on this host by resuming with
+`koha-upgrade-schema atslibrary` directly instead of re-running the script.
 
-### 6. Phase 8 locale generation is a no-op on Debian (script defect — NOT fixed)
+**Now fixed in the script:** the backup is skipped if `${UPD_PL}.orig` already
+exists, and Patch 1's insertion is guarded by a marker check (skips if the
+MariaDB-11.x-patch comment is already present), so a re-run after a partial
+failure is a safe no-op instead of double-patching.
 
-The script runs `locale-gen en_US.UTF-8`. Debian's `locale-gen` **ignores
+### 6. Phase 8 locale generation is a no-op on Debian (script defect — fixed 2026-08-25)
+
+The script ran `locale-gen en_US.UTF-8`. Debian's `locale-gen` **ignores
 arguments** and regenerates only what is uncommented in `/etc/locale.gen`, where
 `en_US.UTF-8` was still commented out. The following
 `dpkg-reconfigure --frontend=noninteractive locales` reads the same file, so it
-is equally ineffective. Result: `locale -a` showed no `en_US` at all, despite
+was equally ineffective. Result: `locale -a` showed no `en_US` at all, despite
 Koha requiring it, and the script would have reported success.
 
 Fixed on this host by uncommenting the entry first:
@@ -261,8 +276,10 @@ Fixed on this host by uncommenting the entry first:
 sed -i 's/^# *en_US.UTF-8 UTF-8/en_US.UTF-8 UTF-8/' /etc/locale.gen && locale-gen
 ```
 
-`locale -a` now reports `en_US.utf8`. The script should be changed to do the same,
-and to verify with `locale -a | grep -q en_US` rather than assuming success.
+`locale -a` now reports `en_US.utf8`. **Now fixed in the script itself:** it runs
+the same `sed` + `locale-gen` sequence, then verifies with
+`locale -a | grep -q '^en_US.utf8$'` and `die`s with a clear message if the
+locale still isn't present, instead of assuming success.
 
 ### 7. Missing item types across nearly the entire collection (data problem in the source database — fixed)
 
