@@ -3,7 +3,22 @@
 Migration of the `atslibrary` Koha instance from the legacy server onto a fresh
 Debian 13 (Trixie) host, driven by `koha_migrate_new_server.sh`.
 
-## Status: all 11 phases complete — functionally verified, not yet production-hardened
+## Status: CLOSED (2026-08-27) — migration process validated end-to-end on two hosts; production cutover is separate follow-up work
+
+This migration/validation project is complete: `koha_migrate_new_server.sh`
+was run to completion on `192.168.20.252` (the original run) and, after
+fixing the defects found there, again from scratch on a second independent
+host, `192.168.20.251` (see **Second migration run** below), with the second
+run requiring zero manual script patching. All nine findings are diagnosed,
+fixed or explicitly deferred with a documented reason (see **Migration
+findings**). Nothing further is planned under this project.
+
+**Explicitly out of scope / left for a future, separate effort:** the seven
+**Production hardening** items (none done on either host) and the ~4,629
+legacy items with no barcode (Finding 8's "Not fixed" note). Pick this README
+back up when that work is scheduled — it's a live reference, not an archive.
+
+### Original run (192.168.20.252) — phase-by-phase
 
 | Phase | Description | State |
 |-------|-------------|-------|
