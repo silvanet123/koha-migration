@@ -3,20 +3,24 @@
 Migration of the `atslibrary` Koha instance from the legacy server onto a fresh
 Debian 13 (Trixie) host, driven by `koha_migrate_new_server.sh`.
 
-## Status: CLOSED (2026-08-27) — migration process validated end-to-end on two hosts; production cutover is separate follow-up work
+## Status: LIVE IN PRODUCTION (2026-10-03) — cut over to 192.168.1.251; hardening is now urgent, not optional
 
-This migration/validation project is complete: `koha_migrate_new_server.sh`
-was run to completion on `192.168.20.252` (the original run) and, after
-fixing the defects found there, again from scratch on a second independent
-host, `192.168.20.251` (see **Second migration run** below), with the second
-run requiring zero manual script patching. All nine findings are diagnosed,
-fixed or explicitly deferred with a documented reason (see **Migration
-findings**). Nothing further is planned under this project.
+The validation project closed on 2026-08-27 after two successful test-network
+runs (`192.168.20.252`, then `192.168.20.251`). On **2026-10-03**, the same
+script was used to cut `atslibrary` over for real on the production network:
+source `192.168.1.254` → destination `192.168.1.251` (see **Production
+migration run** below). Findings 4, 5 and 6 required zero manual intervention
+for the second consecutive run; Finding 3 recurred and was fixed the same way;
+Findings 7 and 8 were reproduced and fixed with the same unmodified scripts.
+The instance is live and serving the real `atslibrary` collection.
 
-**Explicitly out of scope / left for a future, separate effort:** the seven
-**Production hardening** items (none done on either host) and the ~4,629
-legacy items with no barcode (Finding 8's "Not fixed" note). Pick this README
-back up when that work is scheduled — it's a live reference, not an archive.
+**This changes the urgency of Production hardening below.** Every item there
+(no HTTPS, empty MariaDB root password, shared staff password, 2-day
+local-only backups, DNS, old-server decommissioning) now applies to a live
+production system handling real patron data, not a test replica. Treat it as
+the immediate next work, not deferred follow-up. The ~4,629 legacy items with
+no barcode (Finding 8's "Not fixed" note) remain a separate, lower-priority
+item.
 
 ### Original run (192.168.20.252) — phase-by-phase
 
@@ -505,10 +509,64 @@ items, 450 patrons, staff (`:81`) and OPAC (`:82`) both HTTP 200, and both
 production-hardening gaps documented for `192.168.20.252` apply here too (see
 **Production hardening** below) — this host has not been hardened either.
 
+## Production migration run: 192.168.1.251 (2026-10-03)
+
+The real production cutover, distinct from the two test-network validation
+runs above (`192.168.20.252`/`192.168.20.251`). Source `192.168.1.254` is the
+actual production Koha 16.11 server (hostname `ATSagape`, same institution's
+live `atslibrary` data — not a copy); destination `192.168.1.251` is a fresh
+Debian 13 host on the real production network.
+
+**Pre-flight:** verified passwordless root SSH in all directions (orchestrating
+host → source, orchestrating host → destination, source ↔ destination — the
+last of these needed `StrictHostKeyChecking=no` instead of `accept-new`, since
+the source's older OpenSSH client doesn't support that option), confirmed the
+destination's `/etc/hosts` correctly matched its real IP (no repeat of Finding
+9), checked internet/DNS reachability, and confirmed a blank `koha-common`
+install. The migration script and fix scripts were pulled fresh from this
+GitHub repo rather than reusing a stale local copy that predated the Finding
+4/5/6 fixes. `OLD_SERVER_IP` in the script's `CONFIGURATION` block (hardcoded
+to the test network's `192.168.20.254`) was updated to the real source,
+`192.168.1.254`, before running.
+
+A fresh `koha-dump atslibrary` was taken on the source immediately before
+starting, since data had changed since the cron-generated dump from earlier
+that day — the script picks the newest dump by mtime, so this is the one it
+used.
+
+**Findings 4, 5 and 6 again required zero manual intervention** — the second
+consecutive clean run (after `192.168.20.251`), now on real production data
+and a different subnet, reinforcing that the script fixes are not network- or
+dataset-specific.
+**Finding 3 recurred** identically (`borrowernumber 100`, `suggestions_manage`)
+and was fixed the same way, resuming via `koha-upgrade-schema atslibrary`
+directly. **Findings 7 and 8** were reproduced (26,526 items with no `itype`;
+14 items with no home/holding library, including the original `itemnumber
+61839`) and fixed with the same unmodified `apply_itemtype_fix_20260816.sql` /
+`apply_library_fix_20260820.sql` scripts. Both monitoring cron jobs were
+deployed.
+
+**Smoke test** (beyond the standard HTTP 200 checks): authenticated login was
+verified for all three staff accounts directly against `C4::Auth::checkpw`
+(not by scraping the login form, which Koha 26's CSRF middleware correctly
+rejects without a token) — all three returned a successful auth. Catalogue
+search (staff and OPAC) returned results via Zebra. Four separate biblio
+detail pages, including the original Finding 8 URL
+(`biblionumber=54120&audit=1`), all returned HTTP 200. `plack-intranet-error.log`
+and `plack-api-error.log` were clean except for one expected CSRF warning from
+the login-form test itself.
+
+Final state: Koha `26.0503000`, 16,422 biblios, 26,567 items, **453** patrons
+(slightly more than the `192.168.20.251` test run's 450, consistent with real
+ongoing circulation activity on the production source). The temporary staff
+password is stored in `/root/.koha_atslibrary_admin_temp_pass` on
+`192.168.1.251` (root-only, never echoed to any log or chat transcript).
+
 ## Production hardening
 
-Ordered by risk. **None of these are done.** The instance is functional but
-should be treated as LAN-internal until at least steps 1-3 are complete.
+Ordered by risk. **None of these are done, and this is now a live system.**
+The instance should be treated as LAN-internal and at material risk until at
+least steps 1-3 are complete — this is no longer a test replica.
 
 ### 1. Terminate TLS (highest priority)
 
