@@ -560,7 +560,9 @@ Final state: Koha `26.0503000`, 16,422 biblios, 26,567 items, **453** patrons
 (slightly more than the `192.168.20.251` test run's 450, consistent with real
 ongoing circulation activity on the production source). The temporary staff
 password is stored in `/root/.koha_atslibrary_admin_temp_pass` on
-`192.168.1.251` (root-only, never echoed to any log or chat transcript).
+`192.168.1.251` (root-only, never echoed to any log or chat transcript). This
+run's scripts are tagged in this repo as `production-cutover-20261003`; its
+host-side artefacts are archived under **Cleanup steps** below.
 
 ## Production hardening
 
@@ -648,6 +650,34 @@ surviving record. None of the deleted files were tracked by git.
 `/root` now holds only `README.md`, `koha_migrate_new_server.sh`, the two valid
 dumps, `atslibrary.conf.koha-create.bak` (pre-Phase-7 vhost, kept so the Apache
 change can be reverted) and the `.git` repository.
+
+### Production host cleanup (192.168.1.251, 2026-10-03)
+
+Unlike the 2026-08-16 cleanup on `192.168.20.252` (which deleted the raw
+transcripts), the production run's artefacts were **archived, not deleted**,
+since this is a live system and the audit trail has more value than tidiness.
+Moved into `/root/migration-archive-20261003/` (mode `700`, root-only):
+
+- `koha-migration-20261003-100946.log` — the main script's Phase 1-6 run log
+- `koha-migration-resume-20261003-105652.log` — the Phase 7-11 resume run log
+- `upgrade_resume.out` — output of the direct `koha-upgrade-schema atslibrary`
+  call used to resume past the Finding 3 orphan-permission block
+- `resume_phases_7_11.sh` — the ad hoc resume script itself (not committed to
+  this repo, same as the `192.168.20.251` run — kept here for audit only)
+- `atslibrary-2026-10-03.sql.gz` (26 MB) — the pre-upgrade dump; **the only
+  rollback path** to the pre-migration state, same caveat as the "Dumps in
+  /root" note below: keep until the cutover gap (hardening step 4) is closed
+  and staff have verified the data
+
+`migrate_run.out` and `resume_711.out` were deleted outright (not archived):
+both were byte-for-byte duplicates of the two `.log` files above, since the
+script's own `tee` to `$LOGFILE` and the launcher's `nohup ... > file`
+redirect captured the identical stdout stream twice.
+
+`/root` on `192.168.1.251` now holds only the tracked scripts (pulled fresh
+from this repo), the two `identify_*.sql`/`apply_*_fix_*.sql` pairs, the
+`.koha_atslibrary_admin_temp_pass` file, and the `migration-archive-20261003/`
+directory.
 
 ### Still outstanding
 
